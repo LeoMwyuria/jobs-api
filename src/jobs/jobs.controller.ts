@@ -1,15 +1,17 @@
-import { Controller, Get, Post, Body, Param, Delete, Query } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Delete, Query, UseGuards } from '@nestjs/common';
 import { JobsService } from './jobs.service';
 import { CreateJobDto } from './dto/create-job.dto';
 import { JobDto } from './dto/job.dto';
 import { PaginationQueryDto } from './dto/pagination-query.dto';
 import { PaginationResponseDto } from './dto/pagination-response.dto';
+import { AdminGuard } from 'src/auth.guard';
 
 @Controller('jobs')
 export class JobsController {
   constructor(private readonly jobsService: JobsService) {}
 
   @Post()
+  @UseGuards(AdminGuard)
   create(@Body() createJobDto: CreateJobDto): Promise<JobDto> {
     return this.jobsService.create(createJobDto);
   }
@@ -25,6 +27,7 @@ export class JobsController {
   }
 
   @Delete(':id')
+  @UseGuards(AdminGuard)
   async remove(@Param('id') id: string): Promise<void> {
     return this.jobsService.remove(id);
   }

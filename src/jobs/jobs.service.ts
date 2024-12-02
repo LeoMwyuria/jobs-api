@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Inject } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Job, JobDocument } from './schemas/job.schema';
@@ -6,18 +6,22 @@ import { CreateJobDto } from './dto/create-job.dto';
 import { JobDto } from './dto/job.dto';
 import { PaginationQueryDto } from './dto/pagination-query.dto';
 import { PaginationResponseDto } from './dto/pagination-response.dto';
+import { Cache } from 'cache-manager';
 import * as timeago from 'timeago.js';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
 
 @Injectable()
 export class JobsService {
   constructor(
-    @InjectModel(Job.name) private jobModel: Model<JobDocument>
+    @InjectModel(Job.name) private jobModel: Model<JobDocument>,
+    @Inject(CACHE_MANAGER) private cacheManager: Cache
   ) {}
 
   async create(createJobDto: CreateJobDto): Promise<JobDto> {
     try {
       const createdJob = new this.jobModel(createJobDto);
       const job = await createdJob.save();
+      await this.clearCache();
       return this.toJobDto(job);
     } catch (error) {
       if (error.name === 'ValidationError') {
@@ -30,6 +34,13 @@ export class JobsService {
   }
 
   async findAll(paginationQuery: PaginationQueryDto): Promise<PaginationResponseDto<JobDto>> {
+    const cacheKey = `jobs_page_${paginationQuery.page}_limit_${paginationQuery.limit}`;
+    const cachedData = await this.cacheManager.get<PaginationResponseDto<JobDto>>(cacheKey);
+
+    if (cachedData) {
+      return cachedData;
+    }
+
     const { page = 1, limit = 9 } = paginationQuery;
     try {
       const skip = (page - 1) * limit;
@@ -46,7 +57,7 @@ export class JobsService {
 
       const totalPages = Math.ceil(totalItems / limit);
 
-      return {
+      const result = {
         items: jobs.map(job => this.toJobDto(job)),
         meta: {
           totalItems,
@@ -55,6 +66,9 @@ export class JobsService {
           currentPage: page,
         },
       };
+
+      await this.cacheManager.set(cacheKey, result, 300); // Cache for 5 minutes
+      return result;
     } catch (error) {
       throw new BadRequestException(
         'Error fetching jobs: ' + error.message
@@ -63,12 +77,21 @@ export class JobsService {
   }
 
   async findOne(id: string): Promise<JobDto> {
+    const cacheKey = `job_${id}`;
+    const cachedJob = await this.cacheManager.get<JobDto>(cacheKey);
+
+    if (cachedJob) {
+      return cachedJob;
+    }
+
     try {
       const job = await this.jobModel.findById(id).exec();
       if (!job) {
         throw new NotFoundException(`Job with ID ${id} not found`);
       }
-      return this.toJobDto(job);
+      const jobDto = this.toJobDto(job);
+      await this.cacheManager.set(cacheKey, jobDto, 300);
+      return jobDto;
     } catch (error) {
       if (error instanceof NotFoundException) {
         throw error;
@@ -77,14 +100,15 @@ export class JobsService {
         'Error fetching job: ' + error.message
       );
     }
-    
   }
+
   async remove(id: string): Promise<void> {
     try {
       const result = await this.jobModel.findByIdAndDelete(id).exec();
       if (!result) {
         throw new NotFoundException(`Job with ID ${id} not found`);
       }
+      await this.clearCache();
     } catch (error) {
       if (error instanceof NotFoundException) {
         throw error;
@@ -93,6 +117,10 @@ export class JobsService {
         'Error deleting job: ' + error.message
       );
     }
+  }
+
+  private async clearCache(): Promise<void> {
+    await this.cacheManager.reset();
   }
 
   private toJobDto(job: JobDocument): JobDto {
@@ -110,6 +138,4 @@ export class JobsService {
       location: job.location
     };
   }
-  
-  
 }
